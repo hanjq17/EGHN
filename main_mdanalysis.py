@@ -47,7 +47,7 @@ parser.add_argument('--weight_decay', type=float, default=1e-12, metavar='N',
                     help='timing experiment')
 parser.add_argument('--delta_frame', type=int, default=50,
                     help='Number of frames delta.')
-parser.add_argument('--data_dir', type=str, default='/apdcephfs/share_1364275/EGHN/dataset/mdanalysis/',
+parser.add_argument('--data_dir', type=str, default='YOUR_DATA_DIR',
                     help='Data directory.')
 parser.add_argument('--dropout', type=float, default=0.5,
                     help='Dropout rate (1 - keep probability).')
