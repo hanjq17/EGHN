@@ -106,7 +106,7 @@ class PoolingNet(nn.Module):
 
 class EGHN(nn.Module):
     def __init__(self, in_node_nf, in_edge_nf, hidden_nf, n_cluster, layer_per_block=3, layer_pooling=3, layer_decoder=1,
-                 flat=False, activation=nn.SiLU(), device='cpu', norm=False):
+                 flat=False, activation=nn.SiLU(), device='cpu', norm=False, with_v=True):
         super(EGHN, self).__init__()
         node_hidden_dim = hidden_nf
         # input feature mapping
@@ -117,30 +117,32 @@ class EGHN(nn.Module):
         self.n_layer_pooling = layer_pooling
         self.n_layer_decoder = layer_decoder
         self.flat = flat
+        self.with_v = with_v
         # low-level force net
         self.low_force_net = EGNN(n_layers=self.n_layer_per_block,
                                   in_node_nf=hidden_nf, in_edge_nf=in_edge_nf, hidden_nf=hidden_nf,
-                                  activation=activation, device=device, with_v=True, flat=flat, norm=norm)
+                                  activation=activation, device=device, with_v=with_v, flat=flat, norm=norm)
         self.low_pooling = PoolingNet(n_vector_input=3, hidden_nf=hidden_nf, output_nf=self.n_cluster,
                                       activation=activation, in_edge_nf=in_edge_nf, n_layers=self.n_layer_pooling, flat=flat)
         self.high_force_net = EGNN(n_layers=self.n_layer_per_block,
                                    in_node_nf=hidden_nf, in_edge_nf=1, hidden_nf=hidden_nf,
-                                   activation=activation, device=device, with_v=True, flat=flat)
+                                   activation=activation, device=device, with_v=with_v, flat=flat)
+        _n_vector_input = 4 if self.with_v else 3
         if self.n_layer_decoder == 1:
-            self.kinematics_net = EquivariantScalarNet(n_vector_input=4,
+            self.kinematics_net = EquivariantScalarNet(n_vector_input=_n_vector_input,
                                                        hidden_dim=hidden_nf,
                                                        activation=activation,
                                                        n_scalar_input=node_hidden_dim + node_hidden_dim,
                                                        norm=True,
                                                        flat=flat)
         else:
-            self.kinematics_net = EGMN(n_vector_input=4, hidden_dim=hidden_nf, activation=activation,
+            self.kinematics_net = EGMN(n_vector_input=_n_vector_input, hidden_dim=hidden_nf, activation=activation,
                                        n_scalar_input=node_hidden_dim + node_hidden_dim, norm=True, flat=flat,
                                        n_layers=self.n_layer_decoder)
 
         self.to(device)
 
-    def forward(self, x, h, edge_index, edge_fea, local_edge_index, local_edge_fea, n_node,  v=None, node_mask=None, node_nums=None):
+    def forward(self, x, h, edge_index, edge_fea, local_edge_index, local_edge_fea, n_node, v=None, node_mask=None, node_nums=None):
         """
         :param x: input positions [B * N, 3]
         :param h: input node feature [B * N, R]
@@ -187,13 +189,18 @@ class EGHN(nn.Module):
         p_index = p_index.reshape(-1, n_node, 1)  # [B, N, 1]
         count = torch.einsum('bij,bjk->bik', sT, p_index).clamp_min(1e-5)  # [B, P, 1]
         _x, _h, _nf = x.reshape(-1, n_node, x.shape[-1]), h.reshape(-1, n_node, h.shape[-1]), nf.reshape(-1, n_node, nf.shape[-1])
-        _v = v.reshape(-1, n_node, v.shape[-1])
         # [B, N, 3], [B, N, K], [B, N, 3]
         X, H, NF = torch.einsum('bij,bjk->bik', sT, _x), torch.einsum('bij,bjk->bik', sT, _h), torch.einsum('bij,bjk->bik', sT, _nf)
-        V = torch.einsum('bij,bjk->bik', sT, _v)
-        X, H, NF, V = X / count, H / count, NF / count, V / count  # [B, P, 3], [B, P, K], [B, P, 3]
+        if v is not None:
+            _v = v.reshape(-1, n_node, v.shape[-1])
+            V = torch.einsum('bij,bjk->bik', sT, _v)
+            V = V / count
+            V = V.reshape(-1, V.shape[-1])
+        else:
+            V = None
+        X, H, NF = X / count, H / count, NF / count  # [B, P, 3], [B, P, K], [B, P, 3]
         X, H, NF = X.reshape(-1, X.shape[-1]), H.reshape(-1, H.shape[-1]), NF.reshape(-1, NF.shape[-1])  # [BP, 3]
-        V = V.reshape(-1, V.shape[-1])
+
         a = spmm(torch.stack((local_edge_index[0], local_edge_index[1]), dim=0),
                  torch.ones_like(local_edge_index[0]), x.shape[0], x.shape[0], pooling)  # [BN, P]
         a = a.reshape(-1, n_node, a.shape[-1])  # [B, N, P]
@@ -219,11 +226,16 @@ class EGHN(nn.Module):
         l_nf = torch.einsum('bij,bjk->bik', s, l_nf).reshape(-1, l_nf.shape[-1])  # [BN, 3]
         l_X = X.reshape(-1, AA.shape[1], X.shape[-1])  # [B, P, 3]
         l_X = torch.einsum('bij,bjk->bik', s, l_X).reshape(-1, l_X.shape[-1])  # [BN, 3]
-        l_V = V.reshape(-1, AA.shape[1], V.shape[-1])  # [B, P, 3]
-        l_V = torch.einsum('bij,bjk->bik', s, l_V).reshape(-1, l_V.shape[-1])  # [BN, 3]
+        if v is not None:
+            l_V = V.reshape(-1, AA.shape[1], V.shape[-1])  # [B, P, 3]
+            l_V = torch.einsum('bij,bjk->bik', s, l_V).reshape(-1, l_V.shape[-1])  # [BN, 3]
+            vectors = [l_nf, x - l_X, v - l_V, nf]
+        else:
+            vectors = [l_nf, x - l_X, nf]
         l_H = _H.reshape(-1, AA.shape[1], _H.shape[-1])  # [B, P, K]
         l_H = torch.einsum('bij,bjk->bik', s, l_H).reshape(-1, l_H.shape[-1])  # [BN, K]
-        l_kinematics, h_out = self.kinematics_net(vectors=[l_nf, x - l_X, v - l_V, nf],
+
+        l_kinematics, h_out = self.kinematics_net(vectors=vectors,
                                                   scalars=torch.cat((h, l_H), dim=-1))  # [BN, 3]
         _l_X = _X.reshape(-1, AA.shape[1], _X.shape[-1])  # [B, P, 3]
         _l_X = torch.einsum('bij,bjk->bik', s, _l_X).reshape(-1, _l_X.shape[-1])  # [BN, 3]
