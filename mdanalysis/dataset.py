@@ -17,8 +17,9 @@ class MDAnalysisDataset(Dataset):
     NBodyDataset
 
     """
+
     def __init__(self, dataset_name, partition='train', tmp_dir=None, delta_frame=1, train_valid_test_ratio=None,
-                 test_rot=False, test_trans=False, load_cached=False, cut_off=6):
+                 test_rot=False, test_trans=False, load_cached=False, cut_off=6, backbone=False):
         super().__init__()
         self.delta_frame = delta_frame
         self.dataset = dataset_name
@@ -27,9 +28,13 @@ class MDAnalysisDataset(Dataset):
         self.test_rot = test_rot
         self.test_trans = test_trans
         self.cut_off = cut_off
+        self.backbone = backbone
         if load_cached:
             print(f'Loading {dataset_name} from cached data for {partition}...')
-            tmp_dir = os.path.join(tmp_dir, 'adk_processed')
+            if backbone:
+                tmp_dir = os.path.join(tmp_dir, 'adk_backbone_processed')
+            else:
+                tmp_dir = os.path.join(tmp_dir, 'adk_processed')
         self.tmp_dir = tmp_dir
         if train_valid_test_ratio is None:
             train_valid_test_ratio = [0.6, 0.2, 0.2]
@@ -43,6 +48,7 @@ class MDAnalysisDataset(Dataset):
                                      int(sum(train_valid_test_ratio[:2]) * (self.n_frames - delta_frame))]
             return
 
+        assert not self.backbone, NotImplementedError("Use load_cached for backbone case.")
         if dataset_name.lower() == 'adk':
             adk = datasets.fetch_adk_equilibrium(data_home=tmp_dir)
             self.data = mda.Universe(adk.topology, adk.trajectory)
@@ -105,6 +111,8 @@ class MDAnalysisDataset(Dataset):
                 loc_t += trans
             return loc_0, vel_0, edge_global, edge_global_attr, edges, edge_attr, charges, loc_t, vel_t
 
+        assert not self.backbone, NotImplementedError("Use load_cached for backbone case.")
+
         ts_0, ts_t, d, angle, trans = None, None, [0, 0, 1], 0, [0, 0, 0]
         # Initial frame
         retry_0 = 0
@@ -153,7 +161,7 @@ class MDAnalysisDataset(Dataset):
             except OSError:
                 print(f'Reading error at {frame_t} t')
                 retry_t += 1
-        assert retry_t!= 10, OSError(f'Falied to read velocity by 10 times')
+        assert retry_t != 10, OSError(f'Falied to read velocity by 10 times')
 
         # Rotations and Translations
         if self.test_rot and self.partition == "test":

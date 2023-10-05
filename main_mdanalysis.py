@@ -51,6 +51,8 @@ parser.add_argument('--data_dir', type=str, default='YOUR_DATA_DIR',
                     help='Data directory.')
 parser.add_argument('--dropout', type=float, default=0.5,
                     help='Dropout rate (1 - keep probability).')
+parser.add_argument("--backbone", action="store_true",
+                    help="Load backbone data of protein")
 
 parser.add_argument('--lambda_link', type=float, default=1, help='The weight of the linkage loss.')
 parser.add_argument('--interaction_layer', type=int, default=3, help='The number of interaction layers per block.')
@@ -80,29 +82,6 @@ if args.config_by_file is not None:
         args = vars(args)
         args.update((k, v) for k, v in hyper_params.items() if k in args)
         args = Namespace(**args)
-        # args.exp_name = hyper_params["exp_name"]
-        # args.batch_size = hyper_params["batch_size"]
-        # args.epochs = hyper_params["epochs"]
-        # args.no_cuda = hyper_params["no_cuda"]
-        # args.seed = hyper_params["seed"]
-        # args.lr = hyper_params["lr"]
-        # args.nf = hyper_params["nf"]
-        # args.model = hyper_params["model"]
-        # args.attention = hyper_params["attention"]
-        # args.n_layers = hyper_params["n_layers"]
-        # args.degree = hyper_params["degree"]
-        # args.max_training_samples = hyper_params["max_training_samples"]
-        # # Do not necessary in practice.
-        # #args.dataset = hyper_params["dataset"]
-        # args.data_dir = hyper_params["data_dir"]
-        # args.weight_decay = hyper_params["weight_decay"]
-        # args.norm_diff = hyper_params["norm_diff"]
-        # args.tanh = hyper_params["tanh"]
-        # args.dropout = hyper_params["dropout"]
-        # args.flat = hyper_params["flat"] if "flat" in hyper_params else args.flat
-        # args.test_trans = hyper_params["test_trans"] if "test_trans" in hyper_params else args.test_trans
-        # args.test_rot = hyper_params["test_rot"] if "test_rot" in hyper_params else args.test_rot
-        # args.load_cached = hyper_params["load_cached"] if "load_cached" in hyper_params else args.load_cached
 
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 
@@ -133,7 +112,8 @@ def main():
     torch.cuda.manual_seed(seed)
 
     dataset_train = MDAnalysisDataset('adk', partition='train', tmp_dir=args.data_dir,
-                                      delta_frame=args.delta_frame, load_cached=args.load_cached)
+                                      delta_frame=args.delta_frame, load_cached=args.load_cached,
+                                      backbone=args.backbone)
     sampler = None
     shuffle = True
     loader_train = torch.utils.data.DataLoader(dataset_train, batch_size=args.batch_size,
@@ -141,14 +121,16 @@ def main():
                                                num_workers=args.n_workers, collate_fn=collate_mda)
 
     dataset_val = MDAnalysisDataset('adk', partition='valid', tmp_dir=args.data_dir,
-                                    delta_frame=args.delta_frame, load_cached=args.load_cached)
+                                    delta_frame=args.delta_frame, load_cached=args.load_cached,
+                                    backbone=args.backbone)
     loader_val = torch.utils.data.DataLoader(dataset_val, batch_size=args.batch_size, shuffle=False,
                                              drop_last=False, num_workers=args.n_workers, collate_fn=collate_mda)
 
     # Val and test do not need sampler.
     dataset_test = MDAnalysisDataset('adk', partition='test', tmp_dir=args.data_dir,
                                      delta_frame=args.delta_frame, load_cached=args.load_cached,
-                                     test_rot=False, test_trans=False)
+                                     test_rot=False, test_trans=False,
+                                     backbone=args.backbone)
     loader_test = torch.utils.data.DataLoader(dataset_test, batch_size=args.batch_size,
                                               shuffle=False,  drop_last=False,
                                               num_workers=args.n_workers, collate_fn=collate_mda)
